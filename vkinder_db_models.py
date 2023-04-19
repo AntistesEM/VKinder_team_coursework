@@ -81,13 +81,13 @@ class UserPhoto(Base):
     user = relationship(
         Users,
         backref='user_photo',
-        cascade='all,delete-orphan',
+        cascade='all,delete',
         single_parent=True
     )
     photo = relationship(
         Photos,
         backref='user_photo',
-        cascade='all,delete-orphan',
+        cascade='all,delete',
         single_parent=True
     )
 
