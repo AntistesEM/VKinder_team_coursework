@@ -166,7 +166,7 @@ class VkBot:
             parameter_id=self.results[self.user_index]["link_user"],
             city=info_user['city'],
             sex=sex_text,
-            age=info_user['year'],
+            age=info_user['age'],
             books=info_user['books'],
             music=info_user['music'],
             groups=','.join(map(str, info_user['groups']))
@@ -179,12 +179,12 @@ class VkBot:
         for photo_ in photos_list:
             user_photo = UserPhoto(
                 user_id=self.results[self.user_index]["link_user"],
-                photo_id=photo_['id']
+                photo_id=photo_[2]
             )
             photo = Photos(
-                photo_id=photo_['id'],
-                photo_link=photo_['url'],
-                likes=photo_['count']
+                photo_id=photo_[2],
+                photo_link=photo_[1],
+                likes=photo_[0]
             )
             session.add(user_photo)
             session.add(photo)
