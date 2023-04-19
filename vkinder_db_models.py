@@ -1,11 +1,31 @@
-import sqlalchemy as sq
+import configparser
 import os
-from sqlalchemy.orm import declarative_base, relationship
-from config import login, password, db_name
 
-os.environ['DSN'] = f'postgresql://{login}:{password}@localhost:5432/{db_name}'
-DSN = os.environ['DSN']
-engine = sq.create_engine(DSN)
+import sqlalchemy as sq
+from psycopg2 import Error
+from sqlalchemy.orm import declarative_base, relationship, sessionmaker
+
+
+def create_session():
+    try:
+        config = configparser.ConfigParser()
+        config.read("settings.ini")
+        os.environ["DSN"] = (
+            f'{config["Database"]["sql_system"]}://'
+            f'{config["Database"]["login"]}:'
+            f'{config["Database"]["password"]}'
+            f'@{config["Database"]["host"]}:'
+            f'{config["Database"]["port"]}/'
+            f'{config["Database"]["dbname"]}'
+        )
+        DSN = os.environ["DSN"]
+        engine_ = sq.create_engine(DSN)
+        Session = sessionmaker(bind=engine_)
+        session_ = Session()
+    except (Exception, Error) as error:
+        print("Ошибка при работе с PostgreSQL", error)
+    return engine_, session_
+
 
 Base = declarative_base()
 
@@ -13,12 +33,12 @@ Base = declarative_base()
 class Parameters(Base):
     __tablename__ = 'Parameters'
     parameter_id = sq.Column(sq.Integer, primary_key=True)
-    country = sq.Column(sq.String, nullable=False)
-    region = sq.Column(sq.String, nullable=False)
-    city = sq.Column(sq.String, nullable=False)
-    sex = sq.Column(sq.String, nullable=False)
-    age_from = sq.Column(sq.Integer, nullable=False)
-    age_to = sq.Column(sq.Integer, nullable=False)
+    city = sq.Column(sq.String, nullable=True)
+    sex = sq.Column(sq.String, nullable=True)
+    age = sq.Column(sq.Integer, nullable=True)
+    books = sq.Column(sq.String, nullable=True)
+    music = sq.Column(sq.String, nullable=True)
+    groups = sq.Column(sq.String, nullable=True)
 
     def __str__(self):
         return f'''Рarameter ID: {self.parameter_id} | Сountry: {self.country} | Region: {self.region} |  City: {self.city} | Sex: {self.sex} | Age from: {self.age_from} | Age to: {self.age_to} | '''
@@ -32,9 +52,11 @@ class Users(Base):
     profile_link = sq.Column(sq.String, nullable=False)
     favorite = sq.Column(sq.Boolean, default=False)
     block = sq.Column(sq.Boolean, default=False)
-    parameter_id = sq.Column(sq.Integer, sq.ForeignKey('Parameters.parameter_id'), nullable=False)
+    parameter_id = sq.Column(
+        sq.Integer, sq.ForeignKey('Parameters.parameter_id'), nullable=False
+    )
 
-    parameters = relationship(Parameters, backref='users', cascade='save-update, merge, delete')
+    parameters = relationship(Parameters, backref='users', cascade='all,delete')
 
     def __str__(self):
         return f'''User ID: {self.user_id} | Name: {self.first_name} | Surname: {self.last_name} |  Link: {self.profile_link} | Favorite: {self.favorite} | Block: {self.block} | Parameter ID: {self.parameter_id} | '''
@@ -53,11 +75,21 @@ class Photos(Base):
 class UserPhoto(Base):
     __tablename__ = 'User_Photo'
     id = sq.Column(sq.Integer, primary_key=True, autoincrement=True)
-    user_id = sq.Column(sq.Integer, sq.ForeignKey('Users.user_id'), nullable=False)
-    photo_id = sq.Column(sq.Integer, sq.ForeignKey('Photos.photo_id'), nullable=False)
+    user_id = sq.Column(sq.Integer, sq.ForeignKey('Users.user_id'), nullable=True)
+    photo_id = sq.Column(sq.Integer, sq.ForeignKey('Photos.photo_id'), nullable=True)
 
-    user = relationship(Users, backref='user_photo', cascade='save-update, merge, delete')
-    photo = relationship(Photos, backref='user_photo', cascade='save-update, merge, delete')
+    user = relationship(
+        Users,
+        backref='user_photo',
+        cascade='all,delete-orphan',
+        single_parent=True
+    )
+    photo = relationship(
+        Photos,
+        backref='user_photo',
+        cascade='all,delete-orphan',
+        single_parent=True
+    )
 
     def __str__(self):
         return f'''ID: {self.id} | User ID: {self.user_id} | Photo ID: {self.photo_id} | '''
@@ -66,3 +98,17 @@ class UserPhoto(Base):
 def create_tables(engine):
     Base.metadata.drop_all(engine)
     Base.metadata.create_all(engine)
+
+
+engine, session = create_session()
+
+create_tables(engine)
+
+query = (
+    session.query(Users, Parameters, Photos)
+    .join(Parameters)
+    .join(UserPhoto)
+    .join(Photos)
+)
+
+session.close()

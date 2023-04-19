@@ -1,25 +1,31 @@
-import requests
-import time
-from pprint import pprint
+import configparser
 import re
+import time
 
-from credentials import token
-from credentials import vk_id
+import requests
+
+config = configparser.ConfigParser()
+config.read("settings.ini")
 
 
 class VKinder:
 
-    def __init__(self, token, user_id, version='5.131'):
-        self.token = token
+    def __init__(self, user_id: str, version='5.131'):
+        self.token = config["VK"]["access_token"]
         self.id = user_id
         self.version = version
         self.params = {'access_token': self.token, 'v': self.version}
 
-    def self_info(self): #Функция собирает информацию о текущем пользователе и возвращает словарь с данными.
+    # Функция собирает информацию о текущем пользователе и возвращает
+    # словарь с данными.
+    def self_info(self, id_user=None) -> dict:
         url = 'https://api.vk.com/method/users.get'
-        params = {'user_ids': self.id}
+        params = {'user_ids': id_user}
         fields = {'fields': 'bdate, city, sex, music, books'}
-        response = requests.get(url, params={**self.params, **params, **fields}).json()
+        response = requests.get(
+            url,
+            params={**self.params, **params, **fields}
+        ).json()
         self_info = {}
         year = self.get_birthday_year(response['response'][0]['bdate'])
         self_info['year'] = year
@@ -30,15 +36,19 @@ class VKinder:
         self_info['groups'] = self.groups_get(self.id)['response']['items']
         return self_info
 
-    def get_birthday_year(self, bdate: str): #Функция обрабатывает полученную дату рождения пользователя и возвращает только год.
-        reg = re.match(r'([0-9]{1,2})\.([0-9]{1,2})\.([0-9]{4})', bdate)
-        if reg != None:
+    # Функция обрабатывает полученную дату рождения пользователя и возвращает
+    # только год.
+    @staticmethod
+    def get_birthday_year(bdate: str) -> str:
+        reg = re.match(r'(\d{1,2})\.(\d{1,2})\.(\d{4})', bdate)
+        if reg is not None:
             year = reg.group(3)
         else:
             year = 0
         return year
 
-    def groups_get(self, user_id): #Функция получает список групп пользователя и возвращает словарь.
+    # Функция получает список групп пользователя и возвращает словарь.
+    def groups_get(self, user_id) -> list:
         url = 'https://api.vk.com/method/groups.get'
         params = {'user_id': user_id, 'count': 1000}
         response = requests.get(url, params={**self.params, **params}).json()
@@ -54,10 +64,7 @@ class VKinder:
         #В category3_search попадают пользователи после второй фильтрации, у которых есть совпадения либо по
         #общим книгам, либо по музыке. Функция возвращает список пользователей со всеми данными, либо после 3ей фильтрации,
         # либо, если таких не найдено, после предыдущей.
-        url = 'https://api.vk.com/method/users.search'
-        fields = {'count': 1000, 'fields': 'bdate, city, sex, music, books'}
-        response = requests.get(url, params={**self.params, **fields}).json()
-        self_info = self.self_info()
+        self_info = self.self_info(self.id)
         self_year = self_info['year']
         self_city = self_info['city']
         self_sex = self_info['sex']
@@ -69,6 +76,13 @@ class VKinder:
         category1_search = {}
         category2_search = {}
         category3_search = {}
+        url = 'https://api.vk.com/method/users.search'
+        fields_ = {
+            'count': 1000,
+            'sex': 1 if self_sex == 2 else 2,
+            'fields': 'bdate, city, sex, music, books, is_closed'}
+        response = requests.get(url, params={**self.params, **fields_}).json()
+        time.sleep(0.33)
         for user in response['response']['items']:
             if 'bdate' not in user.keys():
                 pass
@@ -76,14 +90,14 @@ class VKinder:
                 pass
             else:
                 user_year = self.get_birthday_year(user['bdate'])
-                if user_year == self_year\
-                    and user['city']['title'] == self_city\
-                    and user['sex'] != self_sex:
+                if user_year == self_year \
+                        and user['city']['title'] == self_city \
+                        and user['is_closed'] is not True:
                     category1_search[user['id']] = user
         for user1 in category1_search.values():
             user1_groups = self.groups_get(user1['id'])
             time.sleep(0.3)
-            if user1_groups != None:
+            if user1_groups is not None:
                 for group in self_groups:
                     if group in user1_groups['response']['items']:
                         category2_search[user1['id']] = user1
@@ -94,7 +108,7 @@ class VKinder:
                 for pattern in user2_music:
                     for music in self_music:
                         match = re.search(pattern, music)
-                        if match == None:
+                        if match is None:
                             pass
                         elif match.group(0) in user2_music:
                             category3_search[user2['id']] = user2
@@ -109,7 +123,7 @@ class VKinder:
                 for pattern1 in user3_books:
                     for book in self_books:
                         match1 = re.search(pattern1, book)
-                        if match1 == None:
+                        if match1 is None:
                             pass
                         elif match1.group(0) in user3_books:
                             category3_search[user3['id']] = user3
@@ -124,14 +138,16 @@ class VKinder:
         elif len(category1_search) != 0:
             return category1_search
 
-    def get_photos(self, self_id): #Функция возвращает фото с профиля пользователя в максимальном разрешении.
+    # Функция возвращает фото с профиля пользователя в максимальном разрешении.
+    def get_photos(self, self_id) -> list[dict[str, any]]:
         url = 'https://api.vk.com/method/photos.get'
         params = {'owner_id': self_id,
                   'album_id': 'profile',
                   'extended': '1',
-                  'photo_sizes': '0',
-                  'count': 3}
+                  'photo_sizes': '0', 'count': 3
+        }
         response = requests.get(url, params={**self.params, **params}).json()
+        time.sleep(0.33)
         photo_list = response['response']['items']
         photo_to_upload = []
         for photo_info in photo_list:
@@ -143,12 +159,13 @@ class VKinder:
                 else:
                     pass
                 b.update(photo_info['likes'])
-                b['date'] = photo_info['date']
+                b['id'] = photo_info['id']
             photo_to_upload.append(b)
-
         return photo_to_upload
 
-    def get_users_info(self): #Функция возвращает нужные данные найденных ранее пользоватедей (Имя, ссылку, фото х3)
+    # Функция возвращает нужные данные найденных ранее пользоватедей
+    # (Имя, ссылку, фото х3)
+    def get_users_info(self) -> list[dict[str, any]]:
         users_info = []
         ids = self.users_search()
         for user_id in ids.values():
@@ -156,23 +173,14 @@ class VKinder:
             photo_list = self.get_photos(user_id['id'])
             photo_url_list = []
             for photo in photo_list:
-                photo_url_list.append(photo['url'])
+                photo_url_list.append(f"photo{user_id['id']}_{photo['id']}")
             user_info['photos'] = photo_url_list
             user_info['first_name'] = user_id['first_name']
             user_info['last_name'] = user_id['last_name']
-            user_info['link'] = f"vk.com/{user_id['id']}"
+            user_info['link_user'] = user_id['id']
             users_info.append(user_info)
         return users_info
 
 
 if __name__ =='__main__':
-
-    vkinder = VKinder(token, vk_id)
-    vkinder.get_users_info()
-
-    # pprint(vkinder.self_info())
-    # pprint(vkinder.users_search())
-    # print(vkinder.groups_get())
-    # pprint(vkinder.get_photos())
-    # pprint(vkinder.get_users_info())
-
+    pass

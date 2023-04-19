@@ -1,13 +1,12 @@
 import configparser
-from datetime import date, datetime
 from random import randrange
 
-import requests
 import vk_api
 from vk_api.keyboard import VkKeyboard, VkKeyboardColor
 from vk_api.longpoll import VkLongPoll, VkEventType
 
-from vkinder_db import Users, Parameters, session
+from VKinder import VKinder
+from vkinder_db_models import Users, Parameters, session, Photos, UserPhoto
 
 
 # получаем из файла "settings.ini" токен для сообщества и пользовательский
@@ -26,14 +25,14 @@ long_poll = VkLongPoll(vk)
 
 class VkBot:
     def __init__(self):
-        self.offset = 0
+        self.event = None
+        self.results = None
+        self.vkinder_requests = None
         self.user_index = 0
         self.user_index_list = 0
         self.prev_event = ""
         self.main_domain = "https://vk.com/"
         self.request = ""
-        self.results = []
-        self.event = ""
         (
             self.start,
             self.main,
@@ -57,8 +56,6 @@ class VkBot:
         keyboard_main.add_line()
         keyboard_main.add_button("Избранное", color=VkKeyboardColor.SECONDARY)
         keyboard_main.add_button("Черный список", color=VkKeyboardColor.SECONDARY)
-        keyboard_main.add_line()
-        keyboard_main.add_button("Новый поиск", color=VkKeyboardColor.SECONDARY)
 
         keyboard_favorites = VkKeyboard(one_time=True)
         keyboard_favorites.add_button("Далее", color=VkKeyboardColor.PRIMARY)
@@ -108,59 +105,6 @@ class VkBot:
         }
         vk.method("messages.send", parameters)
 
-    # получаем данные о пользователе ботом метод -- users.get
-    def get_info_user(self):
-        info = session_api.users.get(
-            user_ids=self.event.user_id,
-            fields=("bdate", "sex", "city", "domain", "country"),
-        )
-        age = self.calculate_age(info[0]["bdate"])
-        sex = info[0]["sex"]
-        country = info[0]["country"]["id"]
-        city = info[0]["city"]["title"]
-        region = "??????????"  # как его найти?
-        return {
-            "age": age,
-            "sex": sex,
-            "city": city,
-            "country": country,
-            "region": region
-        }
-
-    # ищем пользователей по параметрам, метод -- users.search
-    def get_info_user_params(self):
-        url = "https://api.vk.com/method/users.search"
-        params = {
-            "user_ids": self.event.user_id,
-            "access_token": get_tokens()["user_token"],
-            "v": "5.131",
-            "count": 1000,
-            "offset": self.offset,
-            "country": self.get_info_user()["country"],
-            "hometown": self.get_info_user()["city"],
-            "sex": self.get_info_user()["sex"],
-            "fields": "domain,photo_id,country,city,sex,bdate",
-            "age_from": self.get_info_user()["age"] - 5,
-            "age_to": self.get_info_user()["age"] + 5,
-            "has_photo": True
-        }
-        response = requests.get(
-            url,
-            params={**params}
-        ).json()["response"]["items"]
-        return response
-
-    # вычисляем возраст по дате рождения
-    @staticmethod
-    def calculate_age(born: str) -> int:
-        born = datetime.strptime(born, "%d.%m.%Y").date()
-        today = date.today()
-        return (
-            today.year - born.year - (
-                (today.month, today.day) < (born.month, born.day)
-            )
-        )
-
     # логика сообщения "НАЧАТЬ"
     def start_search(self):
         message = (
@@ -175,6 +119,7 @@ class VkBot:
 
     # логика для кнопки "ПОИСК" и "СЛЕДУЮЩИЙ"
     def search(self):
+        self.results = self.vkinder_requests.get_users_info()
         message = f"Найдено {len(self.results)} пользователей\n"
         if self.request == "следующий":
             self.user_index += 1
@@ -184,12 +129,13 @@ class VkBot:
         message += (
             f"\n{self.results[self.user_index]['first_name']}"
             f"\n{self.results[self.user_index]['last_name']}"
-            f"\n{self.main_domain + self.results[self.user_index]['domain']}"
+            f"\n{self.main_domain + 'id'}"
+            f"{self.results[self.user_index]['link_user']}"
         )
         self.write_msg(
             user_id=self.event.user_id,
             message=message,
-            attachment="photo" + self.results[self.user_index]["photo_id"],    # !!! изменить на вывод 3х фото !!!!
+            attachment=','.join(self.results[self.user_index]["photos"]),
             keyboard=self.main.get_keyboard()
         )
         return self.user_index
@@ -197,16 +143,19 @@ class VkBot:
     # логика кнопок "В избранное" и "В черный список"
     def add_favorites_or_blacklist(self, flag):
         user = Users(
-            user_id=self.results[self.user_index]["id"],
+            user_id=self.results[self.user_index]["link_user"],
             first_name=self.results[self.user_index]["first_name"],
             last_name=self.results[self.user_index]["last_name"],
-            profile_link=self.main_domain +
-                         self.results[self.user_index]["domain"],
+            profile_link=f"{self.main_domain + 'id'}"
+                         f"{self.results[self.user_index]['link_user']}",
             favorite=flag,
             block=not flag,
-            parameter_id=self.results[self.user_index]["id"]
+            parameter_id=self.results[self.user_index]["link_user"]
         )
-        sex = self.results[self.user_index]["sex"]
+        info_user = self.vkinder_requests.self_info(
+            self.results[self.user_index]["link_user"]
+        )
+        sex = info_user['sex']
         if sex == 1:
             sex_text = "female"
         elif sex == 2:
@@ -214,22 +163,31 @@ class VkBot:
         else:
             sex_text = "not specified"
         parameter = Parameters(
-            parameter_id=self.results[self.user_index]["id"],
-            country=self.results[self.user_index]["country"]["title"],
-            region="Moscow",
-            city=self.results[self.user_index]["city"]["title"],
+            parameter_id=self.results[self.user_index]["link_user"],
+            city=info_user['city'],
             sex=sex_text,
-            age_from=self.get_info_user()["age"] - 5,
-            age_to=self.get_info_user()["age"] + 5
+            age=info_user['year'],
+            books=info_user['books'],
+            music=info_user['music'],
+            groups=','.join(map(str, info_user['groups']))
         )
-        # user_photo = UserPhoto(                                       # реализовать UserPhoto
-        #     user_id=self.results[self.user_index]["id"],
-        #     photo_id=self.results[self.user_index]["photo_id"]
-        # )
-        # for photo in photos:                                          # реализовать photos
-        #     photo = Photos(photo_id='1', photo_link='222', likes=89)
-
         session.add_all([user, parameter])
+        session.commit()
+        photos_list = self.vkinder_requests.get_photos(
+            self.results[self.user_index]["link_user"]
+        )
+        for photo_ in photos_list:
+            user_photo = UserPhoto(
+                user_id=self.results[self.user_index]["link_user"],
+                photo_id=photo_['id']
+            )
+            photo = Photos(
+                photo_id=photo_['id'],
+                photo_link=photo_['url'],
+                likes=photo_['count']
+            )
+            session.add(user_photo)
+            session.add(photo)
         session.commit()
         if flag:
             message = f"Пользователь " \
@@ -294,6 +252,9 @@ class VkBot:
             keyboard_name = self.blacklist.get_keyboard()
         users = session.query(Users).filter_by(user_id=user_id).first()
         session.delete(users)
+        user_photo = session.query(UserPhoto).filter_by(user_id=None).all()
+        for photo in user_photo:
+            session.delete(photo)
         session.commit()
         self.write_msg(
             user_id=self.event.user_id,
@@ -333,11 +294,11 @@ class VkBot:
     def handle_message(self):
         for self.event in long_poll.listen():
             if self.event.type == VkEventType.MESSAGE_NEW and self.event.to_me:
+                self.vkinder_requests = VKinder(self.event.user_id)
                 self.request = self.event.text.lower()
                 if self.request == "начать":
                     self.start_search()
-                elif self.request in ("поиск", "следующий"):
-                    self.results = self.get_info_user_params()
+                elif self.request in ("поиск", "следующий", "новый поиск"):
                     self.user_index = self.search()
                 elif self.request == "в избранное":
                     flag = True
@@ -356,22 +317,6 @@ class VkBot:
                 elif self.request == "далее":
                     self.user_index_list, user_id = \
                         self.look_favorites_or_blacklist(flag)
-                elif self.request == "новый поиск":  # нужно реализовать, вызывает ошибку
-                    self.offset += 1000
-                    self.results = self.get_info_user_params()
-                    # реализовать логику поиск следующих 1000 пользователей или по другим параметрам?
-                    message = f"Найдено {len(self.results)} пользователей\n"
-                    message += (
-                        f"{self.results[self.user_index]['first_name']}"
-                        f"\n{self.results[self.user_index]['last_name']}"
-                        f"\n{self.main_domain + self.results[self.user_index]['domain']}"
-                    )
-                    self.write_msg(
-                        user_id=self.event.user_id,
-                        message=message,
-                        attachment="photo" + self.results[self.user_index]["photo_id"],
-                        keyboard=self.main.get_keyboard(),
-                    )
                 elif self.request == "вернуться к поиску":
                     self.return_to_search()
                 elif self.request == "удалить":
