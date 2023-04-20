@@ -1,4 +1,4 @@
-<h4 align="right">[English](/README.en.md)</h4> 
+<h5 align="right"><a href="./README.en.md">EN</h5> 
 
 <div id="header" align="center">
   <img src="https://webmg.ru/wp-content/uploads/2022/11/4Nm6Pw35ux8.jpg" width="900"/>
